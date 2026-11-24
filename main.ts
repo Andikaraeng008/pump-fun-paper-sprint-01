@@ -15,14 +15,14 @@ import { runBot, LAMPORTS_PER_SOL } from './vendor/makefun-bot.ts';
 const SOL = LAMPORTS_PER_SOL;
 const CHASER_REAL = 55n * SOL; // enter the chaser when real SOL first hits 55
 const CHASER_BUY = 200_000_000n; // 0.20 SOL
-const CHASER_STOP = 3500n; // 35% trailing stop, in bps
+const CHASER_STOP = 2500n; // 25% trailing stop, in bps
 const CHASER_MAX_SLOTS = 300;
 const SPRAY_BUY = 10_000_000n; // 0.01 SOL
 const SPRAY_MIN_REAL = 1n * SOL; // 1% cap allows 0.01 SOL once real SOL >= 1
-const SPRAY_STOP = 2000n; // 20% trailing stop, in bps
-const SPRAY_MAX_SLOTS = 600;
+const SPRAY_STOP = 1000n; // 10% trailing stop, in bps — spray is guardrail only, keep its bleed small
+const SPRAY_MAX_SLOTS = 300; // short holds so spray cycles fast and frees slots for the chaser
 const SPRAY_MAX_ENTRIES = 25;
-const SPRAY_MAX_OPEN = 2;
+const SPRAY_MAX_OPEN = 1; // spray must not crowd out the chaser, which is the money leg
 const SLIPPAGE = 500; // 5% max slippage on every order
 const BPS = 10_000n;
 
@@ -94,53 +94,48 @@ await runBot({
       }
     }
 
-    // 2. Entries. Chaser first, then spray, while positions and cash allow.
-    // committedPositionCount() only sees filled + previously pending orders, so count
-    // the buys planned in this batch too — otherwise one batch could plan past the
-    // 5-position cap and the harness would reject the extras.
+    // 2. Entries, in two passes so the chaser (the money leg) always gets the
+    // free position slots before the spray (which exists only for the guardrail).
     const free = () => state.freeCashLamports();
     let planned = state.committedPositionCount();
+    const canBuy = (amount: bigint, mint: string) =>
+      planned < 5 &&
+      free() >= amount + state.txFeeLamports() &&
+      state.maxBuyLamports(mint) >= amount;
+    const noteBuy = (mint: string, kind: Kind, curve: { virtual_quote_reserves: bigint; virtual_token_reserves: bigint }) => {
+      // filled flips true once the buy's fill shows in state.positions (2 slots later).
+      tracks.set(mint, { kind, buySlot: slot, filled: false, peakQ: curve.virtual_quote_reserves, peakT: curve.virtual_token_reserves });
+      planned++;
+    };
+    // Pass 1 — chaser: real SOL crossed 55, one attempt per mint, 0.20 SOL.
     for (const curve of state.curves.values()) {
       if (orders.length >= 14) break;
       if (curve.complete) continue;
       const mint = curve.mint;
-      if (tracks.has(mint)) continue;
-      if (state.positions.has(mint)) continue;
+      if (tracks.has(mint) || state.positions.has(mint) || chaserTried.has(mint)) continue;
+      if (curve.real_quote_reserves < CHASER_REAL) continue;
+      chaserTried.add(mint);
+      if (!canBuy(CHASER_BUY, mint)) continue;
+      orders.push({ side: 'buy', mint, quote_lamports: CHASER_BUY, max_slippage_bps: SLIPPAGE });
+      noteBuy(mint, 'chaser', curve);
+    }
+    // Pass 2 — spray: fresh curve with 1 <= real SOL < 55, one 0.01 SOL buy per mint.
+    for (const curve of state.curves.values()) {
+      if (orders.length >= 14) break;
+      if (curve.complete) continue;
+      const mint = curve.mint;
+      if (tracks.has(mint) || state.positions.has(mint) || sprayTried.has(mint)) continue;
       const real = curve.real_quote_reserves;
-      // Chaser: real SOL crossed 55, one attempt per mint, 0.20 SOL.
-      if (!chaserTried.has(mint) && real >= CHASER_REAL) {
-        chaserTried.add(mint);
-        if (
-          planned < 5 &&
-          free() >= CHASER_BUY + state.txFeeLamports() &&
-          state.maxBuyLamports(mint) >= CHASER_BUY
-        ) {
-          orders.push({ side: 'buy', mint, quote_lamports: CHASER_BUY, max_slippage_bps: SLIPPAGE });
-          // filled flips true once the buy's fill shows in state.positions (2 slots later).
-          tracks.set(mint, { kind: 'chaser', buySlot: slot, filled: false, peakQ: curve.virtual_quote_reserves, peakT: curve.virtual_token_reserves });
-          planned++;
-        }
-        continue;
-      }
-      // Spray: fresh curve with real SOL >= 1, one 0.01 SOL buy per mint.
-      if (!sprayTried.has(mint) && real >= SPRAY_MIN_REAL && real < CHASER_REAL) {
-        sprayTried.add(mint);
-        if (sprayEntries >= SPRAY_MAX_ENTRIES) continue;
-        let sprayOpen = 0;
-        for (const tr of tracks.values()) if (tr.kind === 'spray') sprayOpen++;
-        if (sprayOpen >= SPRAY_MAX_OPEN) continue;
-        if (
-          planned < 5 &&
-          free() >= SPRAY_BUY + state.txFeeLamports() &&
-          state.maxBuyLamports(mint) >= SPRAY_BUY
-        ) {
-          orders.push({ side: 'buy', mint, quote_lamports: SPRAY_BUY, max_slippage_bps: SLIPPAGE });
-          // filled flips true once the buy's fill shows in state.positions (2 slots later).
-          tracks.set(mint, { kind: 'spray', buySlot: slot, filled: false, peakQ: curve.virtual_quote_reserves, peakT: curve.virtual_token_reserves });
-          sprayEntries++;
-          planned++;
-        }
-      }
+      if (real < SPRAY_MIN_REAL || real >= CHASER_REAL) continue;
+      sprayTried.add(mint);
+      if (sprayEntries >= SPRAY_MAX_ENTRIES) continue;
+      let sprayOpen = 0;
+      for (const tr of tracks.values()) if (tr.kind === 'spray') sprayOpen++;
+      if (sprayOpen >= SPRAY_MAX_OPEN) continue;
+      if (!canBuy(SPRAY_BUY, mint)) continue;
+      orders.push({ side: 'buy', mint, quote_lamports: SPRAY_BUY, max_slippage_bps: SLIPPAGE });
+      noteBuy(mint, 'spray', curve);
+      sprayEntries++;
     }
     return orders;
   },
