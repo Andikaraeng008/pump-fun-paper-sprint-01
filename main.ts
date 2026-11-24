@@ -16,8 +16,8 @@ import { runBot, LAMPORTS_PER_SOL } from './vendor/makefun-bot.ts';
 const SOL = LAMPORTS_PER_SOL;
 const CHASER_REAL = 55n * SOL; // enter the chaser when real SOL first hits 55
 const CHASER_BUY = 200_000_000n; // 0.20 SOL
-const CHASER_STOP = 1500n; // 15% trailing stop, in bps — variant V2 check
-const CHASER_MAX_SLOTS = 300;
+const CHASER_STOP = 1000n; // 10% trailing stop, in bps — pump.fun dumps are fast and deep
+const CHASER_MAX_SLOTS = 150;
 const SPRAY_BUY = 10_000_000n; // 0.01 SOL
 const SPRAY_MIN_REAL = 1n * SOL; // 1% cap allows 0.01 SOL once real SOL >= 1
 const SPRAY_STOP = 1000n; // 10% trailing stop, in bps
