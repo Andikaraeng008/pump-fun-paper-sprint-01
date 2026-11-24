@@ -4,9 +4,10 @@
 //     curve's real SOL first reaches 55, buy 0.20 SOL, then ride it with a 35% trailing
 //     stop from the peak price, or exit after 300 slots, whichever comes first.
 //  2. spray: buy 0.01 SOL in each fresh curve once its real SOL reaches 1 (the 1%
-//     per-order cap then allows exactly 0.01 SOL), up to 25 spray entries and at most
-//     2 open at once, exit on a 20% trailing stop or after 600 slots. The spray exists
-//     to clear the guardrail: >=20 distinct mints with a >=0.01 SOL round trip.
+//     per-order cap then allows exactly 0.01 SOL), up to 22 spray entries and at most
+//     1 open at once, exit on a 10% trailing stop or after 30 slots. The spray exists
+//     only to clear the guardrail: >=20 distinct mints with a >=0.01 SOL round trip,
+//     so it exits fast and cheap instead of pretending to be a profit leg.
 //  3. never more than 5 open positions (harness cap); chaser entries take priority.
 // Prices are virtual-reserve ratios (virtual_quote / virtual_token), compared with
 // BigInt cross-multiplication so no float ever enters a decision.
@@ -15,14 +16,14 @@ import { runBot, LAMPORTS_PER_SOL } from './vendor/makefun-bot.ts';
 const SOL = LAMPORTS_PER_SOL;
 const CHASER_REAL = 55n * SOL; // enter the chaser when real SOL first hits 55
 const CHASER_BUY = 200_000_000n; // 0.20 SOL
-const CHASER_STOP = 3500n; // 35% trailing stop, in bps — looser stop lets winners run to migration
-const CHASER_MAX_SLOTS = 300;
+const CHASER_STOP = 1000n; // 10% trailing stop, in bps — pump.fun dumps are fast and deep
+const CHASER_MAX_SLOTS = 150;
 const SPRAY_BUY = 10_000_000n; // 0.01 SOL
 const SPRAY_MIN_REAL = 1n * SOL; // 1% cap allows 0.01 SOL once real SOL >= 1
-const SPRAY_STOP = 2000n; // 20% trailing stop, in bps
-const SPRAY_MAX_SLOTS = 600;
-const SPRAY_MAX_ENTRIES = 25;
-const SPRAY_MAX_OPEN = 2;
+const SPRAY_STOP = 1000n; // 10% trailing stop, in bps
+const SPRAY_MAX_SLOTS = 30; // spray exits fast on purpose: it is guardrail only, not a profit leg
+const SPRAY_MAX_ENTRIES = 22; // guardrail needs 20 round trips; 22 leaves room for a failed buy
+const SPRAY_MAX_OPEN = 1; // spray must not crowd out the chaser, which is the money leg
 const SLIPPAGE = 500; // 5% max slippage on every order
 const BPS = 10_000n;
 
