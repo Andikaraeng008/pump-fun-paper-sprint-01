@@ -31,6 +31,7 @@ type Kind = 'chaser' | 'spray';
 interface Track {
   kind: Kind;
   buySlot: number;
+  filled: boolean; // true once the buy fill has shown up in state.positions
   peakQ: bigint; // virtual quote reserves at the peak price
   peakT: bigint; // virtual token reserves at the peak price
 }
@@ -56,13 +57,25 @@ await runBot({
     const orders: { side: 'buy' | 'sell'; mint: string; quote_lamports?: bigint; token_amount?: bigint; max_slippage_bps: number }[] = [];
     const slot = batch.slot;
 
-    // Drop tracks whose position is gone (sold, completed, or flattened by the harness).
-    for (const mint of [...tracks.keys()]) {
-      if (!state.positions.has(mint)) tracks.delete(mint);
+    // Drop tracks whose position is gone — but a track created at buy-decision time
+    // has no position until its fill lands 2 slots later, so keep unfilled tracks
+    // while their buy is still pending, and drop them only once the fill window has
+    // passed with no position (the buy was rejected or failed). Without this, the
+    // first 5 fills would sit unexited forever and block every later entry.
+    const pendingBuy = new Set<string>();
+    for (const p of state.pending.values()) if (p.order.side === 'buy') pendingBuy.add(p.order.mint);
+    for (const [mint, tr] of [...tracks.entries()]) {
+      if (state.positions.has(mint)) {
+        tr.filled = true;
+        continue;
+      }
+      if (!tr.filled && (pendingBuy.has(mint) || slot - tr.buySlot <= 10)) continue;
+      tracks.delete(mint);
     }
 
     // 1. Manage open positions: update peaks, exit on trailing stop or age.
     for (const [mint, tr] of tracks) {
+      if (!tr.filled) continue;
       const curve = state.curves.get(mint);
       const pos = state.positions.get(mint);
       if (!curve || curve.complete || !pos || pos.token_amount <= 0n) continue;
@@ -103,7 +116,8 @@ await runBot({
           state.maxBuyLamports(mint) >= CHASER_BUY
         ) {
           orders.push({ side: 'buy', mint, quote_lamports: CHASER_BUY, max_slippage_bps: SLIPPAGE });
-          tracks.set(mint, { kind: 'chaser', buySlot: slot, peakQ: curve.virtual_quote_reserves, peakT: curve.virtual_token_reserves });
+          // filled flips true once the buy's fill shows in state.positions (2 slots later).
+          tracks.set(mint, { kind: 'chaser', buySlot: slot, filled: false, peakQ: curve.virtual_quote_reserves, peakT: curve.virtual_token_reserves });
           planned++;
         }
         continue;
@@ -121,7 +135,8 @@ await runBot({
           state.maxBuyLamports(mint) >= SPRAY_BUY
         ) {
           orders.push({ side: 'buy', mint, quote_lamports: SPRAY_BUY, max_slippage_bps: SLIPPAGE });
-          tracks.set(mint, { kind: 'spray', buySlot: slot, peakQ: curve.virtual_quote_reserves, peakT: curve.virtual_token_reserves });
+          // filled flips true once the buy's fill shows in state.positions (2 slots later).
+          tracks.set(mint, { kind: 'spray', buySlot: slot, filled: false, peakQ: curve.virtual_quote_reserves, peakT: curve.virtual_token_reserves });
           sprayEntries++;
           planned++;
         }
