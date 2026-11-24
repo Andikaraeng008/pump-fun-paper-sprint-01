@@ -44,8 +44,8 @@ let sprayEntries = 0;
 function priceWorseThanPeak(
   q: bigint, t: bigint, peakQ: bigint, peakT: bigint, stopBps: bigint,
 ): boolean {
-  // current price q/t < peak price * (1 - stop)  <=>  q * peakT * (10000-stop) < peakQ * t * 10000
-  return q * peakT * (BPS - stopBps) < peakQ * t * BPS;
+  // current price q/t < peak price * (1 - stop)  <=>  q * peakT * 10000 < peakQ * t * (10000-stop)
+  return q * peakT * BPS < peakQ * t * (BPS - stopBps);
 }
 
 function priceAbovePeak(q: bigint, t: bigint, peakQ: bigint, peakT: bigint): boolean {
